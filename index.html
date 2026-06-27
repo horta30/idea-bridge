@@ -448,6 +448,14 @@ body {
   cursor: pointer; transition: all 0.2s;
 }
 .btn-dl-zip:hover { box-shadow: 0 0 16px rgba(245,230,66,0.3); }
+.btn-play-mix {
+  flex: 1; padding: 12px; border-radius: 8px;
+  border: 1px solid var(--free); background: transparent;
+  color: var(--free); font-family: var(--dm); font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s;
+}
+.btn-play-mix:hover { background: rgba(123,97,255,0.1); }
+.btn-play-mix.playing { background: rgba(123,97,255,0.2); border-color: var(--accent); color: var(--accent); }
 
 @media (max-width: 480px) {
   .header { padding: 14px 16px; }
@@ -479,6 +487,7 @@ body {
     <div class="preview-stems" id="previewStems"></div>
     <div class="preview-actions">
       <button class="btn-close-preview" onclick="closePreview()">Volver</button>
+      <button class="btn-play-mix" id="btnPlayMix" onclick="togglePlayMix()">▶ Escuchar Mix</button>
       <button class="btn-dl-zip" onclick="downloadZip()">⬇ Descargar ZIP</button>
     </div>
   </div>
@@ -1000,6 +1009,36 @@ async function synthesizeBeat({ kicks, snares, hihats, duration }) {
   } catch(e) { return null; }
 }
 
+// ===== PLAY MIX PREVIEW =====
+let mixSource = null;
+async function togglePlayMix() {
+  const btn = document.getElementById('btnPlayMix');
+  if (mixSource) {
+    mixSource.stop();
+    mixSource = null;
+    btn.textContent = '▶ Escuchar Mix';
+    btn.classList.remove('playing');
+    return;
+  }
+  const ready = tracks.filter(t => t.state === 'ready');
+  if (ready.length === 0) return;
+  btn.textContent = '⏳ Mezclando...';
+  const mixBuffer = await mixAllTracks(ready);
+  if (!mixBuffer) return;
+  const ctx = getCtx();
+  mixSource = ctx.createBufferSource();
+  mixSource.buffer = mixBuffer;
+  mixSource.connect(ctx.destination);
+  mixSource.start();
+  btn.textContent = '⏹ Detener Mix';
+  btn.classList.add('playing');
+  mixSource.onended = () => {
+    mixSource = null;
+    btn.textContent = '▶ Escuchar Mix';
+    btn.classList.remove('playing');
+  };
+}
+
 // ===== MIX ALL TRACKS =====
 async function mixAllTracks(readyTracks) {
   const ctx = getCtx();
@@ -1076,6 +1115,9 @@ function openPreview() {
 }
 
 function closePreview() {
+  if (mixSource) { mixSource.stop(); mixSource = null; }
+  document.getElementById('btnPlayMix').textContent = '▶ Escuchar Mix';
+  document.getElementById('btnPlayMix').classList.remove('playing');
   document.getElementById('previewModal').classList.remove('show');
 }
 
