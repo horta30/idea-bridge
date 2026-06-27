@@ -457,6 +457,54 @@ body {
 .btn-play-mix:hover { background: rgba(123,97,255,0.1); }
 .btn-play-mix.playing { background: rgba(123,97,255,0.2); border-color: var(--accent); color: var(--accent); }
 
+/* LOOP STATION BAR */
+.loop-bar {
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.btn-loop {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--dm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-loop:hover { background: rgba(245,230,66,0.1); }
+.btn-loop.active { background: var(--accent); color: #0D0D0D; animation: loop-pulse 1.5s infinite; }
+.btn-loop:disabled { opacity: 0.3; cursor: not-allowed; }
+@keyframes loop-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,230,66,0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(245,230,66,0); }
+}
+.loop-status {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.loop-progress-wrap {
+  flex: 1;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.loop-progress {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.05s linear;
+}
+
 @media (max-width: 480px) {
   .header { padding: 14px 16px; }
   .tracks-list { padding: 0 16px; }
@@ -518,6 +566,13 @@ body {
   </div>
   <span class="metro-status" id="metroStatus">Metrónomo apagado</span>
   <button class="metro-toggle" id="metroToggle" onclick="toggleMetro()">▶ Encender</button>
+</div>
+
+<!-- LOOP STATION -->
+<div class="loop-bar">
+  <button class="btn-loop" id="btnLoop" onclick="toggleLoop()" disabled>▶ Loop</button>
+  <span class="loop-status" id="loopStatus">Graba una pista para activar el loop</span>
+  <div class="loop-progress-wrap"><div class="loop-progress" id="loopProgress"></div></div>
 </div>
 
 <!-- TRACKS -->
@@ -890,6 +945,74 @@ function playTrack(id) {
   src.onended = () => { delete playingSources[id]; };
 }
 
+// ===== LOOP STATION =====
+let loopOn = false;
+let loopSources = [];
+let loopTimer = null;
+let loopStartTime = 0;
+let loopDuration = 0;
+
+function toggleLoop() {
+  if (loopOn) stopLoop();
+  else startLoop();
+}
+
+function startLoop() {
+  const ready = tracks.filter(t => t.state === 'ready' && t.buffer);
+  if (ready.length === 0) return;
+  const ctx = getCtx();
+  loopDuration = Math.max(...ready.map(t => t.buffer.duration));
+  loopOn = true;
+  document.getElementById('btnLoop').textContent = '⏹ Stop';
+  document.getElementById('btnLoop').classList.add('active');
+  document.getElementById('loopStatus').textContent = `Loop · ${formatDur(loopDuration)}`;
+
+  function playOnce() {
+    if (!loopOn) return;
+    loopSources.forEach(s => { try { s.stop(); } catch(e){} });
+    loopSources = [];
+    ready.forEach(t => {
+      const src = ctx.createBufferSource();
+      src.buffer = t.buffer;
+      src.connect(ctx.destination);
+      src.start();
+      loopSources.push(src);
+    });
+    loopStartTime = ctx.currentTime;
+    clearInterval(loopTimer);
+    loopTimer = setInterval(() => {
+      if (!loopOn) return;
+      const elapsed = ctx.currentTime - loopStartTime;
+      const pct = Math.min(100, (elapsed / loopDuration) * 100);
+      document.getElementById('loopProgress').style.width = pct + '%';
+      if (elapsed >= loopDuration) playOnce();
+    }, 50);
+  }
+  playOnce();
+}
+
+function stopLoop() {
+  loopOn = false;
+  loopSources.forEach(s => { try { s.stop(); } catch(e){} });
+  loopSources = [];
+  clearInterval(loopTimer);
+  document.getElementById('btnLoop').textContent = '▶ Loop';
+  document.getElementById('btnLoop').classList.remove('active');
+  document.getElementById('loopProgress').style.width = '0%';
+  updateLoopStatus();
+}
+
+function updateLoopStatus() {
+  const ready = tracks.filter(t => t.state === 'ready');
+  const btn = document.getElementById('btnLoop');
+  btn.disabled = ready.length === 0;
+  if (ready.length === 0) {
+    document.getElementById('loopStatus').textContent = 'Graba una pista para activar el loop';
+  } else if (!loopOn) {
+    document.getElementById('loopStatus').textContent = `${ready.length} pista${ready.length > 1 ? 's' : ''} lista${ready.length > 1 ? 's' : ''}`;
+  }
+}
+
 // ===== BEAT PROCESSING =====
 async function processBeatTrack(t) {
   showOverlay('Analizando tu beatbox...', 'Detectando kick, snare y hi-hat');
@@ -1221,6 +1344,7 @@ function updateBottomBar() {
   const hasReady = tracks.some(t => t.state === 'ready');
   document.getElementById('btnPreview').disabled = !hasReady;
   document.getElementById('btnExport').disabled = !hasReady;
+  updateLoopStatus();
 }
 
 function formatDur(s) {
