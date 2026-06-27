@@ -611,6 +611,7 @@ let playingSources = {}; // id -> AudioBufferSourceNode
 
 // ZIP blobs for export
 let stemBlobs = {}; // id -> Blob
+let sessionLoopLen = 0; // loop length in seconds, set by first track
 
 function getCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -803,6 +804,10 @@ async function toggleRecord(id) {
     if (currentRecording !== null) {
       showToast('Detén la pista actual primero', 'err'); return;
     }
+    if (loopOn) {
+      showToast('🎧 Usa audífonos — el mic capta los parlantes', 'err');
+      await new Promise(r => setTimeout(r, 1500));
+    }
     await startRecording(id);
   }
 }
@@ -830,14 +835,18 @@ async function startRecording(id) {
     t.analyser = analyser; t.srcNode = srcNode;
     drawLiveWave(id, analyser);
 
-    // Timer
+    // Timer + auto-stop at loop length for non-first tracks
     const start = Date.now();
     t.timerInterval = setInterval(() => {
       const s = Math.floor((Date.now() - start) / 1000);
       const m = Math.floor(s / 60), sec = s % 60;
       document.getElementById(`timer-${id}`).textContent = `${m}:${sec.toString().padStart(2,'0')}`;
       t.duration = (Date.now() - start) / 1000;
-    }, 200);
+      if (sessionLoopLen > 0 && t.duration >= sessionLoopLen) {
+        stopRecording(id);
+        showToast('Pista recortada al largo del loop', 'ok');
+      }
+    }, 100);
 
   } catch(e) {
     showToast('No se pudo acceder al micrófono', 'err');
@@ -863,6 +872,20 @@ function stopRecording(id) {
       t.buffer = await getCtx().decodeAudioData(ab);
       drawStaticWave(id, t.buffer);
     } catch(e) { console.warn('decode err', e); }
+
+    // If first track, quantize length to nearest bar and set session loop
+    if (sessionLoopLen === 0 && t.buffer) {
+      t.buffer = quantizeToBar(t.buffer, bpm);
+      t.duration = t.buffer.duration;
+      sessionLoopLen = t.duration;
+      const wavBlob = bufferToWav(t.buffer);
+      t.blob = wavBlob;
+      stemBlobs[id] = wavBlob;
+      t.blobIsWav = true;
+      drawStaticWave(id, t.buffer);
+      const bars = Math.round(sessionLoopLen / (240 / bpm));
+      showToast(`Loop base: ${bars} compas${bars > 1 ? 'es' : ''} (${formatDur(sessionLoopLen)})`, 'ok');
+    }
 
     setTrackState(id, 'ready');
     currentRecording = null;
@@ -1034,6 +1057,21 @@ async function processBeatTrack(t) {
   await new Promise(r => setTimeout(r, 300));
   hideOverlay();
   showToast(`Beat detectado: ${result.kicks.length} kicks · ${result.snares.length} snares · ${result.hihats.length} hi-hats`, 'ok');
+}
+
+function quantizeToBar(buffer, bpm) {
+  const barLen = 240 / bpm; // 4 beats in seconds
+  const bars = Math.max(1, Math.round(buffer.duration / barLen));
+  const targetLen = bars * barLen;
+  const ctx = getCtx();
+  const sr = buffer.sampleRate;
+  const targetSamples = Math.round(targetLen * sr);
+  const newBuf = ctx.createBuffer(1, targetSamples, sr);
+  const src = buffer.getChannelData(0);
+  const dst = newBuf.getChannelData(0);
+  const copyLen = Math.min(src.length, targetSamples);
+  for (let i = 0; i < copyLen; i++) dst[i] = src[i];
+  return newBuf;
 }
 
 function quantizeOnsets(result, bpm) {
