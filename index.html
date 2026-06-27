@@ -887,6 +887,7 @@ async function processBeatTrack(t) {
   await new Promise(r => setTimeout(r, 300));
 
   const result = detectOnsets(t.buffer);
+  quantizeOnsets(result, bpm);
   t.beatData = result;
 
   // Synthesize beat WAV and replace blob
@@ -901,6 +902,14 @@ async function processBeatTrack(t) {
   await new Promise(r => setTimeout(r, 300));
   hideOverlay();
   showToast(`Beat detectado: ${result.kicks.length} kicks · ${result.snares.length} snares · ${result.hihats.length} hi-hats`, 'ok');
+}
+
+function quantizeOnsets(result, bpm) {
+  const stepSec = 60 / bpm / 4; // 16th note grid
+  function snap(onset) { onset.time = Math.round(onset.time / stepSec) * stepSec; }
+  result.kicks.forEach(snap);
+  result.snares.forEach(snap);
+  result.hihats.forEach(snap);
 }
 
 function detectOnsets(buffer) {
@@ -991,6 +1000,33 @@ async function synthesizeBeat({ kicks, snares, hihats, duration }) {
   } catch(e) { return null; }
 }
 
+// ===== MIX ALL TRACKS =====
+async function mixAllTracks(readyTracks) {
+  const ctx = getCtx();
+  const sr = ctx.sampleRate;
+  let maxLen = 0;
+  const buffers = [];
+  for (const t of readyTracks) {
+    if (t.buffer) {
+      buffers.push(t.buffer);
+      if (t.buffer.length > maxLen) maxLen = t.buffer.length;
+    }
+  }
+  if (buffers.length === 0) return null;
+  const mixed = new Float32Array(maxLen);
+  for (const buf of buffers) {
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) mixed[i] += data[i];
+  }
+  // Normalize to prevent clipping
+  let peak = 0;
+  for (let i = 0; i < mixed.length; i++) { const a = Math.abs(mixed[i]); if (a > peak) peak = a; }
+  if (peak > 1) { for (let i = 0; i < mixed.length; i++) mixed[i] /= peak; }
+  const outBuf = ctx.createBuffer(1, maxLen, sr);
+  outBuf.getChannelData(0).set(mixed);
+  return outBuf;
+}
+
 // ===== WAV ENCODER =====
 function bufferToWav(buffer) {
   const numCh = buffer.numberOfChannels;
@@ -1071,6 +1107,15 @@ async function downloadZip() {
       setOverlayProg(Math.round(prog));
     }
 
+    // Mix all tracks into one file
+    showOverlay('Mezclando pistas...', 'Creando mix final');
+    const mixBuffer = await mixAllTracks(ready);
+    if (mixBuffer) {
+      const mixBlob = bufferToWav(mixBuffer);
+      folder.file('Mix_Completo.wav', mixBlob);
+    }
+    setOverlayProg(80);
+
     // README
     const bpmVal = bpm;
     const readme = `IdeaBridge Session
@@ -1081,9 +1126,10 @@ Pistas: ${ready.length}
 ${ready.map((t,i) => `${i+1}. ${t.name || (t.type==='beat'?'Beat':`Pista ${t.id}`)} — ${formatDur(t.duration)}${t.type==='beat' ? ' (beat sintetizado)' : ''}`).join('\n')}
 
 Instrucciones para el productor:
-- Arrastra cada archivo a una pista de tu DAW
-- El archivo Beat es el ritmo procesado (kick/snare/hihat sintetizados)
+- Mix_Completo.wav contiene todas las pistas mezcladas en un solo archivo
+- El archivo Beat es el ritmo procesado (kick/snare/hihat sintetizados y cuantizados al grid)
 - Las pistas libres son las ideas grabadas en audio — úsalas como referencia
+- Arrastra cada archivo a una pista de tu DAW
 - BPM de referencia: ${bpmVal}
 `;
     folder.file('LEEME.txt', readme);
